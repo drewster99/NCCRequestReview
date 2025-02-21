@@ -10,8 +10,34 @@ class NCCRequestReview: ObservableObject {
 }
 
 public class NCCRequestReviewManager: ObservableObject {
-    public init(eventCountsAfterWhichToRequestReview: [Int] = []) {
+    public static let lastReviewRequestedTimestampUserDefaultsKey = "NCCRequestReviewManager_lastReviewRequestedTimestampKey"
+    public private(set) var lastReviewRequestedTimestamp: Date {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: Self.lastReviewRequestedTimestampUserDefaultsKey) else {
+                return .distantPast
+            }
+            do {
+                let timestamp = try JSONDecoder().decode(Date.self, from: data)
+                return timestamp
+            } catch {
+                print("NCCRequestReviewManager: Error decoding timestamp from data: \(error)")
+                return .distantPast
+            }
+        }
+        set {
+            do {
+                let data = try JSONEncoder().encode(newValue)
+                UserDefaults.standard.set(data, forKey: Self.lastReviewRequestedTimestampUserDefaultsKey)
+            } catch {
+                print("NCCRequestReviewManager: Error encoding timestamp to data: \(error)")
+            }
+        }
+    }
+
+    public let minimumSecondsBetweenRequests: TimeInterval
+    public init(minimumSecondsBetweenRequests: TimeInterval, eventCountsAfterWhichToRequestReview: [Int] = []) {
         self.eventCountsAfterWhichToRequestReview = eventCountsAfterWhichToRequestReview
+        self.minimumSecondsBetweenRequests = minimumSecondsBetweenRequests
     }
     
     /// If this array is empty, both it and `eventCount` are completely ignored.
@@ -61,12 +87,19 @@ public class NCCRequestReviewManager: ObservableObject {
 
     public func requestReviewIfAppropriate() {
         guard requestReviewAtNextOpportunity else { return }
+        guard Date().timeIntervalSince(lastReviewRequestedTimestamp) >= minimumSecondsBetweenRequests else {
+            print("Not requesting review yet - not enough time has passed")
+            return
+        }
         guard let requestReview else {
             print("Could not request review because `requestReview` is nil")
             return
         }
         requestReviewAtNextOpportunity = false
-        Task { @MainActor in requestReview() }
+        lastReviewRequestedTimestamp = Date()
+        Task { @MainActor in
+            requestReview()
+        }
     }
     fileprivate var requestReview: RequestReviewAction?
 }

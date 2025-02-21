@@ -12,7 +12,7 @@ import NCCRequestReview
 
 @main
 struct NCCRequestReview_TesterApp: App {
-    @StateObject var reviewManager = NCCRequestReviewManager(eventCountsAfterWhichToRequestReview: [4, 8, 16, 20])
+    @StateObject var reviewManager = NCCRequestReviewManager(minimumSecondsBetweenRequests: 60.0, eventCountsAfterWhichToRequestReview: [4, 8, 16, 20])
     @Environment(\.requestReview) private var directRequestReview
     init() {
         DispatchQueue.main.async {
