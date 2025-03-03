@@ -110,7 +110,6 @@ struct NCCRequestReviewViewMmodifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onAppear {
-                print("ViewModifier appeared")
                 requestReviewManager.requestReview = requestReview
             }
     }
