@@ -162,6 +162,9 @@ public final class NCCRequestReviewManager: ObservableObject {
     /// request that becomes inappropriate mid-delay (another trigger's request
     /// fired, the app went inactive) is skipped. While one request is pending,
     /// further triggers coalesce into it.
+    ///
+    /// `delay` is clamped to 0...3600 seconds; non-finite values are treated
+    /// as zero.
     public func requestReviewIfAppropriate(trigger: String, delay: TimeInterval) {
         guard scheduledRequestTask == nil else {
             skip(trigger: trigger, reason: .alreadyScheduled)
@@ -172,7 +175,10 @@ public final class NCCRequestReviewManager: ObservableObject {
             return
         }
 
-        let delaySeconds = max(0, delay)
+        // Non-finite or absurd delays are programmer error; clamp rather than
+        // trap in the UInt64 conversion below. One hour is far beyond any sane
+        // review-prompt delay.
+        let delaySeconds = delay.isFinite ? min(max(0, delay), 3600) : 0
         Self.logger.info("Review request scheduled: trigger=\(trigger, privacy: .public) delay=\(delaySeconds)s")
         onEvent(.reviewRequestScheduled(trigger: trigger, delaySeconds: delaySeconds))
         scheduledTrigger = trigger

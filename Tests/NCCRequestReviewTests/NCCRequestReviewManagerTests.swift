@@ -408,6 +408,42 @@ final class NCCRequestReviewManagerTests: XCTestCase {
         XCTAssertEqual(attemptedTrigger, "combo")
     }
 
+    // MARK: - Delay clamping
+
+    func testNonFiniteDelayIsClampedToZeroAndFiresImmediately() async {
+        let manager = makeManager(configuration: openConfiguration())
+        var invoked = false
+        _ = registerActiveScene(on: manager) { invoked = true }
+
+        await requestAndAwaitOutcome(manager, trigger: "infinite", delay: .infinity)
+
+        XCTAssertTrue(invoked)
+        guard case .reviewRequestScheduled(_, let delaySeconds) = recordedEvents.first else {
+            XCTFail("Expected reviewRequestScheduled first, got \(recordedEvents)")
+            return
+        }
+        XCTAssertEqual(delaySeconds, 0)
+    }
+
+    func testAbsurdlyLargeDelayIsClampedToCeiling() async {
+        let manager = makeManager(configuration: openConfiguration())
+        _ = registerActiveScene(on: manager)
+
+        manager.requestReviewIfAppropriate(trigger: "huge", delay: .greatestFiniteMagnitude)
+
+        guard case .reviewRequestScheduled(_, let delaySeconds) = recordedEvents.first else {
+            XCTFail("Expected reviewRequestScheduled first, got \(recordedEvents)")
+            return
+        }
+        XCTAssertEqual(delaySeconds, 3600)
+
+        // Don't leave a one-hour sleep pending; cancellation is the outcome.
+        let pendingTask = manager.scheduledRequestTaskForTesting
+        manager.cancelScheduledRequest()
+        await pendingTask?.value
+        XCTAssertTrue(attemptedTriggers.isEmpty)
+    }
+
     // MARK: - Configuration
 
     func testNegativeConfigurationValuesClampToZero() {
