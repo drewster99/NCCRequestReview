@@ -149,7 +149,7 @@ public final class NCCRequestReviewManager: ObservableObject {
     }
 
     /// Convenience for the common "action completed → maybe request" call site.
-    public func recordPrimaryActionAndRequestReview(_ name: String, delay: TimeInterval? = nil) {
+    public func recordPrimaryActionAndRequestReview(_ name: String, delay: TimeInterval) {
         recordPrimaryAction(name)
         requestReviewIfAppropriate(trigger: name, delay: delay)
     }
@@ -162,7 +162,7 @@ public final class NCCRequestReviewManager: ObservableObject {
     /// request that becomes inappropriate mid-delay (another trigger's request
     /// fired, the app went inactive) is skipped. While one request is pending,
     /// further triggers coalesce into it.
-    public func requestReviewIfAppropriate(trigger: String, delay: TimeInterval? = nil) {
+    public func requestReviewIfAppropriate(trigger: String, delay: TimeInterval) {
         guard scheduledRequestTask == nil else {
             skip(trigger: trigger, reason: .alreadyScheduled)
             return
@@ -172,7 +172,7 @@ public final class NCCRequestReviewManager: ObservableObject {
             return
         }
 
-        let delaySeconds = max(0, delay ?? configuration.defaultRequestDelay)
+        let delaySeconds = max(0, delay)
         Self.logger.info("Review request scheduled: trigger=\(trigger, privacy: .public) delay=\(delaySeconds)s")
         onEvent(.reviewRequestScheduled(trigger: trigger, delaySeconds: delaySeconds))
         scheduledTrigger = trigger

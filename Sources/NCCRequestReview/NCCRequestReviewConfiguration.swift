@@ -29,10 +29,6 @@ extension NCCRequestReviewManager {
         /// (`CFBundleShortVersionString`).
         public var limitToOneRequestPerAppVersion: Bool
 
-        /// Delay between an eligible trigger and the request firing, used when
-        /// the call site does not specify its own delay.
-        public var defaultRequestDelay: TimeInterval
-
         /// Creates a configuration. Negative values are clamped to zero so a
         /// bad constant can never open a gate wider than "no restriction".
         public init(
@@ -40,15 +36,13 @@ extension NCCRequestReviewManager {
             minimumIntervalBetweenRequests: TimeInterval = 3 * 24 * 60 * 60,
             minimumLaunchCount: Int = 2,
             minimumIntervalSinceFirstLaunch: TimeInterval = 24 * 60 * 60,
-            limitToOneRequestPerAppVersion: Bool = false,
-            defaultRequestDelay: TimeInterval = 9.0
+            limitToOneRequestPerAppVersion: Bool = false
         ) {
             self.minimumPrimaryActionCount = max(0, minimumPrimaryActionCount)
             self.minimumIntervalBetweenRequests = max(0, minimumIntervalBetweenRequests)
             self.minimumLaunchCount = max(0, minimumLaunchCount)
             self.minimumIntervalSinceFirstLaunch = max(0, minimumIntervalSinceFirstLaunch)
             self.limitToOneRequestPerAppVersion = limitToOneRequestPerAppVersion
-            self.defaultRequestDelay = max(0, defaultRequestDelay)
         }
 
         /// Production defaults: 3 primary actions, 3-day cooldown, never in
@@ -56,7 +50,7 @@ extension NCCRequestReviewManager {
         public static let standard = Configuration()
 
         /// Fast iteration in DEBUG builds: 60s cooldown, no first-session
-        /// gates, a single primary action qualifies, 2s request delay.
+        /// gates, a single primary action qualifies.
         ///
         /// NOTE: this disables the first-session gates, so it cannot be used
         /// to verify first-session behavior — use `.standard` for that.
@@ -65,8 +59,7 @@ extension NCCRequestReviewManager {
             minimumIntervalBetweenRequests: 60,
             minimumLaunchCount: 1,
             minimumIntervalSinceFirstLaunch: 0,
-            limitToOneRequestPerAppVersion: false,
-            defaultRequestDelay: 2.0
+            limitToOneRequestPerAppVersion: false
         )
     }
 }

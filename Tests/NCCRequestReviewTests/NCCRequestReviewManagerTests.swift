@@ -40,8 +40,7 @@ final class NCCRequestReviewManagerTests: XCTestCase {
             minimumIntervalBetweenRequests: 0,
             minimumLaunchCount: 0,
             minimumIntervalSinceFirstLaunch: 0,
-            limitToOneRequestPerAppVersion: false,
-            defaultRequestDelay: 0
+            limitToOneRequestPerAppVersion: false
         )
     }
 
@@ -86,7 +85,7 @@ final class NCCRequestReviewManagerTests: XCTestCase {
     private func requestAndAwaitOutcome(
         _ manager: NCCRequestReviewManager,
         trigger: String = "test",
-        delay: TimeInterval? = 0
+        delay: TimeInterval = 0
     ) async {
         manager.requestReviewIfAppropriate(trigger: trigger, delay: delay)
         await manager.scheduledRequestTaskForTesting?.value
@@ -416,13 +415,11 @@ final class NCCRequestReviewManagerTests: XCTestCase {
             minimumPrimaryActionCount: -5,
             minimumIntervalBetweenRequests: -100,
             minimumLaunchCount: -2,
-            minimumIntervalSinceFirstLaunch: -50,
-            defaultRequestDelay: -9
+            minimumIntervalSinceFirstLaunch: -50
         )
         XCTAssertEqual(configuration.minimumPrimaryActionCount, 0)
         XCTAssertEqual(configuration.minimumIntervalBetweenRequests, 0)
         XCTAssertEqual(configuration.minimumLaunchCount, 0)
         XCTAssertEqual(configuration.minimumIntervalSinceFirstLaunch, 0)
-        XCTAssertEqual(configuration.defaultRequestDelay, 0)
     }
 }
