@@ -2,9 +2,8 @@
 //  NCCRequestReview_TesterApp.swift
 //  NCCRequestReview
 //
-//  Created by Andrew Benson on 2/19/25.
+//  Manual test harness for the v2 gating and scene-registry behavior.
 //
-
 
 import Foundation
 import SwiftUI
@@ -12,8 +11,13 @@ import NCCRequestReview
 
 @main
 struct NCCRequestReview_TesterApp: App {
-    @StateObject var reviewManager = NCCRequestReviewManager(minimumSecondsBetweenRequests: 60.0, eventCountsAfterWhichToRequestReview: [4, 8, 16, 20])
-    @Environment(\.requestReview) private var directRequestReview
+    @StateObject private var reviewManager = NCCRequestReviewManager(
+        configuration: .debugQuickTesting,
+        onEvent: { event in
+            print("NCCRequestReview event: \(event)")
+        }
+    )
+
     init() {
         DispatchQueue.main.async {
             NSApp.setActivationPolicy(.regular)
@@ -22,41 +26,31 @@ struct NCCRequestReview_TesterApp: App {
         }
     }
 
-    var eventCountsText: String {
-        let eventCounts = reviewManager.eventCountsAfterWhichToRequestReview
-        let text = eventCounts.map({"\($0)"}).joined(separator: ", ")
-        return text
-    }
     var body: some Scene {
         WindowGroup("NCCRequestReview - Tester App") {
-            VStack {
-                Text("Current event count is")
-                Text("\(reviewManager.eventCount)")
-                    .font(.title2)
-                    .padding(.bottom)
-                Text("Will call requestReview if `requestReviewIfAppropriate` is called after any of these events: ") + Text(eventCountsText).bold()
+            VStack(spacing: 12) {
+                Text("Launch count: \(reviewManager.launchCount)")
+                Text("Primary actions: \(reviewManager.primaryActionCount)")
+                Text("Last attempt: \(reviewManager.lastRequestAttemptDate?.formatted() ?? "never")")
 
-                Button(action: {
-                    reviewManager.eventCount += 1
-                }) {
-                    Text("Increment event count")
+                Button("Record primary action") {
+                    reviewManager.recordPrimaryAction("tester_action")
                 }
 
-                Button(action: {
-                    reviewManager.requestReviewIfAppropriate()
-                }) {
-                    Text("Request review if appropriate")
+                Button("Record primary action + request review") {
+                    reviewManager.recordPrimaryActionAndRequestReview("tester_action", delay: 2)
                 }
 
-                Button(action: {
-                    directRequestReview()
-                }) {
-                    Text("Request review directly (control case)")
+                Button("Request review if appropriate") {
+                    reviewManager.requestReviewIfAppropriate(trigger: "tester_manual", delay: 2)
                 }
 
+                Button("Cancel scheduled request") {
+                    reviewManager.cancelScheduledRequest()
+                }
             }
-            .nccRequestReviewHandler()
-            .environmentObject(reviewManager)
+            .padding()
+            .nccRequestReviewHandler(reviewManager)
         }
     }
 }
