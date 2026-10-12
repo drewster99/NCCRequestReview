@@ -11,7 +11,7 @@
 import Foundation
 import SwiftUI
 import OSLog
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 import UIKit
 #elseif os(macOS)
 import AppKit
@@ -25,12 +25,23 @@ import AppKit
 /// `WindowGroup`/`Window` scene, call `recordPrimaryAction(_:)` (or the
 /// combined `recordPrimaryActionAndRequestReview(_:delay:)`) when the user
 /// completes a meaningful action, and observe lifecycle via `onEvent`.
+///
+/// Gate state is persisted in `UserDefaults`. Every public persisted property
+/// publishes `objectWillChange` before it changes, so SwiftUI views reading
+/// them stay current.
 @MainActor
 public final class NCCRequestReviewManager: ObservableObject {
-    private static let logger = Logger(subsystem: "NCCRequestReview", category: "NCCRequestReviewManager")
+    private static let logger = Logger(subsystem: "com.nuclearcyborg.NCCRequestReview", category: "NCCRequestReviewManager")
 
     /// Receives lifecycle events; always called on the main actor.
+    ///
+    /// Events are delivered after the manager's state is updated, so the
+    /// handler may safely call back into the manager.
     public typealias EventHandler = (Event) -> Void
+
+    /// Upper bound for a scheduled request's delay, in seconds. Anything
+    /// longer is almost certainly a units mistake at the call site.
+    private static let maximumRequestDelay: TimeInterval = 60 * 60
 
     private enum StorageKey {
         static let launchCount = "NCCRequestReview.launchCount"
@@ -61,8 +72,14 @@ public final class NCCRequestReviewManager: ObservableObject {
     /// Injectable for tests; defaults to `CFBundleShortVersionString`.
     internal var currentAppVersion: String
 
-    private var scheduledRequestTask: Task<Void, Never>?
-    private var scheduledTrigger: String?
+    /// The single pending request, if any. Task and trigger live together so
+    /// they can never disagree.
+    private struct ScheduledRequest {
+        let task: Task<Void, Never>
+        let trigger: String
+    }
+
+    private var scheduledRequest: ScheduledRequest?
 
     /// Creates a review-request manager.
     /// - Parameters:
@@ -81,8 +98,16 @@ public final class NCCRequestReviewManager: ObservableObject {
         self.userDefaults = userDefaults
         self.now = now
         self.onEvent = onEvent
-        self.currentAppVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
-        #if os(iOS)
+        if let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            self.currentAppVersion = bundleVersion
+        } else {
+            // Kept as a fixed placeholder so persisted per-version state is
+            // unchanged; logged because `limitToOneRequestPerAppVersion`
+            // then treats every build as the same version.
+            Self.logger.error("CFBundleShortVersionString missing from the main bundle; using \(Self.unknownAppVersion, privacy: .public) as the app version")
+            self.currentAppVersion = Self.unknownAppVersion
+        }
+        #if os(iOS) || os(visionOS)
         self.isApplicationActive = { UIApplication.shared.applicationState == .active }
         #elseif os(macOS)
         self.isApplicationActive = { NSApp?.isActive ?? false }
@@ -93,31 +118,47 @@ public final class NCCRequestReviewManager: ObservableObject {
         recordLaunchIfNeeded()
     }
 
+    /// App version recorded when the main bundle has no
+    /// `CFBundleShortVersionString`.
+    private static let unknownAppVersion = "unknown"
+
     // MARK: - Persistent gate state
 
     /// Number of process launches seen by this package (counted once per process).
     public private(set) var launchCount: Int {
         get { userDefaults.integer(forKey: StorageKey.launchCount) }
-        set { userDefaults.set(newValue, forKey: StorageKey.launchCount) }
+        set {
+            objectWillChange.send()
+            userDefaults.set(newValue, forKey: StorageKey.launchCount)
+        }
     }
 
     /// When this package first ever ran inside this app.
     public private(set) var firstLaunchDate: Date? {
         get { userDefaults.object(forKey: StorageKey.firstLaunchDate) as? Date }
-        set { userDefaults.set(newValue, forKey: StorageKey.firstLaunchDate) }
+        set {
+            objectWillChange.send()
+            userDefaults.set(newValue, forKey: StorageKey.firstLaunchDate)
+        }
     }
 
     /// Lifetime number of primary actions recorded.
     public private(set) var primaryActionCount: Int {
         get { userDefaults.integer(forKey: StorageKey.primaryActionCount) }
-        set { userDefaults.set(newValue, forKey: StorageKey.primaryActionCount) }
+        set {
+            objectWillChange.send()
+            userDefaults.set(newValue, forKey: StorageKey.primaryActionCount)
+        }
     }
 
     /// When the StoreKit request API was last invoked (attempted, not
     /// necessarily displayed — StoreKit does not report display).
     public private(set) var lastRequestAttemptDate: Date? {
         get { userDefaults.object(forKey: StorageKey.lastRequestAttemptDate) as? Date }
-        set { userDefaults.set(newValue, forKey: StorageKey.lastRequestAttemptDate) }
+        set {
+            objectWillChange.send()
+            userDefaults.set(newValue, forKey: StorageKey.lastRequestAttemptDate)
+        }
     }
 
     private var lastRequestAppVersion: String? {
@@ -142,13 +183,18 @@ public final class NCCRequestReviewManager: ObservableObject {
     /// Records that the user completed a primary action (e.g. finished a
     /// recording, completed a game round). Counted for the lifetime of the app.
     public func recordPrimaryAction(_ name: String) {
-        objectWillChange.send()
         primaryActionCount += 1
         Self.logger.info("Primary action '\(name, privacy: .public)' recorded, total=\(self.primaryActionCount)")
         onEvent(.primaryActionRecorded(name: name, totalCount: primaryActionCount))
     }
 
-    /// Convenience for the common "action completed → maybe request" call site.
+    /// Convenience for the common "action completed → maybe request" call site:
+    /// `recordPrimaryAction(name)` followed by
+    /// `requestReviewIfAppropriate(trigger: name, delay: delay)`.
+    /// - Parameters:
+    ///   - name: The primary action's name; also used as the request trigger.
+    ///   - delay: Seconds to wait before the request fires, clamped to
+    ///     0...3600; non-finite values are treated as zero.
     public func recordPrimaryActionAndRequestReview(_ name: String, delay: TimeInterval) {
         recordPrimaryAction(name)
         requestReviewIfAppropriate(trigger: name, delay: delay)
@@ -163,10 +209,12 @@ public final class NCCRequestReviewManager: ObservableObject {
     /// fired, the app went inactive) is skipped. While one request is pending,
     /// further triggers coalesce into it.
     ///
-    /// `delay` is clamped to 0...3600 seconds; non-finite values are treated
-    /// as zero.
+    /// - Parameters:
+    ///   - trigger: Names what prompted the request; reported in every event.
+    ///   - delay: Seconds to wait before the request fires, clamped to
+    ///     0...3600; non-finite values are treated as zero.
     public func requestReviewIfAppropriate(trigger: String, delay: TimeInterval) {
-        guard scheduledRequestTask == nil else {
+        guard scheduledRequest == nil else {
             skip(trigger: trigger, reason: .alreadyScheduled)
             return
         }
@@ -176,33 +224,37 @@ public final class NCCRequestReviewManager: ObservableObject {
         }
 
         // Non-finite or absurd delays are programmer error; clamp rather than
-        // trap in the UInt64 conversion below. One hour is far beyond any sane
-        // review-prompt delay.
-        let delaySeconds = delay.isFinite ? min(max(0, delay), 3600) : 0
-        Self.logger.info("Review request scheduled: trigger=\(trigger, privacy: .public) delay=\(delaySeconds)s")
-        onEvent(.reviewRequestScheduled(trigger: trigger, delaySeconds: delaySeconds))
-        scheduledTrigger = trigger
+        // trap when converting to a sleep duration.
+        let delaySeconds = delay.isFinite ? min(max(0, delay), Self.maximumRequestDelay) : 0
 
-        scheduledRequestTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+        let task = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delaySeconds))
+            } catch {
+                // Sleep only throws on cancellation, which
+                // `cancelScheduledRequest()` already reported.
+                return
+            }
             guard let self, !Task.isCancelled else { return }
             self.fireScheduledRequest(trigger: trigger)
         }
+        // Record the pending request BEFORE emitting the event so a handler
+        // that calls back into the manager coalesces into this request.
+        scheduledRequest = ScheduledRequest(task: task, trigger: trigger)
+        Self.logger.info("Review request scheduled: trigger=\(trigger, privacy: .public) delay=\(delaySeconds)s")
+        onEvent(.reviewRequestScheduled(trigger: trigger, delaySeconds: delaySeconds))
     }
 
     /// Cancels a pending scheduled request, if any.
     public func cancelScheduledRequest() {
-        guard let task = scheduledRequestTask else { return }
-        task.cancel()
-        scheduledRequestTask = nil
-        let trigger = scheduledTrigger ?? "unknown"
-        scheduledTrigger = nil
-        skip(trigger: trigger, reason: .cancelled)
+        guard let pendingRequest = scheduledRequest else { return }
+        pendingRequest.task.cancel()
+        scheduledRequest = nil
+        skip(trigger: pendingRequest.trigger, reason: .cancelled)
     }
 
     private func fireScheduledRequest(trigger: String) {
-        scheduledRequestTask = nil
-        scheduledTrigger = nil
+        scheduledRequest = nil
 
         if let reason = gateFailure() {
             skip(trigger: trigger, reason: reason)
@@ -229,8 +281,8 @@ public final class NCCRequestReviewManager: ObservableObject {
         if launchCount < configuration.minimumLaunchCount {
             return .firstSession
         }
-        // A missing first-launch date fails closed; a clock rolled back before
-        // the first launch produces a negative interval and also fails.
+        // A missing first-launch date yields a zero interval, which fails
+        // whenever a minimum interval is configured.
         let intervalSinceFirstLaunch = now().timeIntervalSince(firstLaunchDate ?? now())
         if intervalSinceFirstLaunch < configuration.minimumIntervalSinceFirstLaunch {
             return .firstSession
@@ -325,5 +377,5 @@ public final class NCCRequestReviewManager: ObservableObject {
     internal var registeredSceneCountForTesting: Int { sceneRegistrations.count }
 
     /// Test hook: the pending scheduled request, awaitable by tests.
-    internal var scheduledRequestTaskForTesting: Task<Void, Never>? { scheduledRequestTask }
+    internal var scheduledRequestTaskForTesting: Task<Void, Never>? { scheduledRequest?.task }
 }

@@ -38,9 +38,14 @@ private struct NCCRequestReviewHandlerModifier: ViewModifier {
 public extension View {
     /// Registers this window's review-request capability with `manager`.
     ///
-    /// Attach to the content view of every `WindowGroup`/`Window` scene so the
-    /// manager can present the review prompt in the window the user is
-    /// actually using.
+    /// Attach to the OUTERMOST content view of every `WindowGroup`/`Window`
+    /// scene so the manager can present the review prompt in the window the
+    /// user is actually using.
+    ///
+    /// The registration lives from this view's `onAppear` to its
+    /// `onDisappear`. Attaching it to a view that disappears while its window
+    /// stays open (a tab's content, a pushed view) unregisters the window, and
+    /// requests then skip with `.noRequestReviewAction`.
     func nccRequestReviewHandler(_ manager: NCCRequestReviewManager) -> some View {
         modifier(NCCRequestReviewHandlerModifier(manager: manager))
     }

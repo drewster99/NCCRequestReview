@@ -19,11 +19,15 @@ struct NCCRequestReview_TesterApp: App {
     )
 
     init() {
+        #if os(macOS)
+        // `swift run` launches a bare executable with no app bundle; promote
+        // it to a regular foreground app so its window can become active.
         DispatchQueue.main.async {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first?.makeKeyAndOrderFront(nil)
         }
+        #endif
     }
 
     var body: some Scene {
